@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: Blackmagic Devices Library C wrapper
+Description: Wraps the C++ library sdk in plain C
+Version: @PACKAGE_VERSION@
+Libs: -L${libdir} -lbmd -ldl
+Cflags: -I${includedir}
