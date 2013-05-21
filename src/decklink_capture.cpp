@@ -147,7 +147,7 @@ CaptureDelegate::VideoInputFrameArrived(IDeckLinkVideoInputFrame  *v_frame,
 
         a_frame->GetSampleFrameCount();
         a_frame->GetBytes((void **)&frame_bytes);
-        a_frame->GetPacketTime(&timestamp, timebase);
+        a_frame->GetPacketTime(&timestamp, 48000);
 
         audio_cb(ctx, frame_bytes,
                  a_frame->GetSampleFrameCount(),
