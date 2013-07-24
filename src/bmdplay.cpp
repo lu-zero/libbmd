@@ -63,10 +63,6 @@ AVStream *video_st = NULL;
 static enum PixelFormat pix_fmt = PIX_FMT_UYVY422;
 static BMDPixelFormat pix       = bmdFormat8BitYUV;
 
-DECLARE_ALIGNED(16, uint8_t,
-                audio_buffer)[(AVCODEC_MAX_AUDIO_FRAME_SIZE * 3) / 2];
-int data_size = sizeof(audio_buffer);
-int offset    = 0;
 int buffer    = 2000 * 1000;
 
 const unsigned long kAudioWaterlevel = 48000 / 4;      /* small */
@@ -289,9 +285,9 @@ void print_output_modes(IDeckLink *deckLink)
     // List all supported output display modes
     printf("Supported video output display modes and pixel formats:\n");
     while (displayModeIterator->Next(&displayMode) == S_OK) {
-        char *displayModeString = NULL;
+        BMDProbeString str;
 
-        result = displayMode->GetName((const char **)&displayModeString);
+        result = displayMode->GetName(&str);
         if (result == S_OK) {
             char modeName[64];
             int modeWidth;
@@ -305,10 +301,10 @@ void print_output_modes(IDeckLink *deckLink)
             modeHeight = displayMode->GetHeight();
             displayMode->GetFrameRate(&frameRateDuration, &frameRateScale);
             printf("        %2d:   %-20s \t %d x %d \t %7g FPS\n",
-                   displayModeCount++, displayModeString, modeWidth, modeHeight,
+                   displayModeCount++, ToStr(str), modeWidth, modeHeight,
                    (double)frameRateScale / (double)frameRateDuration);
 
-            free(displayModeString);
+            FreeStr(str);
         }
         // Release the IDeckLinkDisplayMode object to prevent a leak
         displayMode->Release();
@@ -346,7 +342,7 @@ int usage(int status)
 
     // Enumerate all cards in this system
     while (deckLinkIterator->Next(&deckLink) == S_OK) {
-        char *deviceNameString = NULL;
+        BMDProbeString str;
 
         // Increment the total number of DeckLink cards found
         numDevices++;
@@ -354,12 +350,12 @@ int usage(int status)
             printf("\n\n");
 
         // *** Print the model name of the DeckLink card
-        result = deckLink->GetModelName((const char **)&deviceNameString);
+        result = deckLink->GetModelName(&str);
         if (result == S_OK) {
-            printf("=============== %s (-C %d )===============\n\n",
-                   deviceNameString,
+            printf("-> %s (-C %d )\n\n",
+                   ToStr(str),
                    numDevices - 1);
-            free(deviceNameString);
+            FreeStr(str);
         }
 
         print_output_modes(deckLink);
@@ -483,7 +479,7 @@ int main(int argc, char *argv[])
 
     avformat_close_input(&ic);
 
-    fprintf(stderr, "video %d audio %d", videoqueue.nb_packets,
+    fprintf(stderr, "video %ld audio %ld", videoqueue.nb_packets,
             audioqueue.nb_packets);
 
     return ret;
@@ -491,11 +487,9 @@ int main(int argc, char *argv[])
 
 Player::Player()
 {
-    m_audioChannelCount = 2;
-    m_audioSampleRate   = bmdAudioSampleRate48kHz;
-    m_audioSampleDepth  = 16;
-    m_running           = false;
-    m_outputSignal      = kOutputSignalDrop;
+    m_audioSampleRate = bmdAudioSampleRate48kHz;
+    m_running         = false;
+    m_outputSignal    = kOutputSignalDrop;
 }
 
 bool Player::Init(int videomode, int connection, int camera)
@@ -509,6 +503,30 @@ bool Player::Init(int videomode, int connection, int camera)
         fprintf(stderr,
                 "This application requires the DeckLink drivers installed.\n");
         goto bail;
+    }
+
+    m_audioSampleDepth =
+        av_get_exact_bits_per_sample(audio_st->codec->codec_id);
+
+    switch (audio_st->codec->channels) {
+        case  2:
+        case  8:
+        case 16:
+            break;
+        default:
+            fprintf(stderr,
+                    "%d channels not supported, please use 2, 8 or 16\n",
+                    audio_st->codec->channels);
+            goto bail;
+    }
+
+    switch (m_audioSampleDepth) {
+        case 16:
+        case 32:
+            break;
+        default:
+            fprintf(stderr, "%dbit audio not supported use 16bit or 32bit\n",
+                    m_audioSampleDepth);
     }
 
     do
@@ -613,12 +631,13 @@ IDeckLinkDisplayMode *Player::GetDisplayModeByIndex(int selectedIndex)
     if (m_deckLinkOutput->GetDisplayModeIterator(&displayModeIterator) != S_OK)
         goto bail;
     while (displayModeIterator->Next(&deckLinkDisplayMode) == S_OK) {
-        const char *modeName;
+        BMDProbeString str;
 
-        if (deckLinkDisplayMode->GetName(&modeName) == S_OK) {
+        if (deckLinkDisplayMode->GetName(&str) == S_OK) {
             if (index == selectedIndex) {
-                printf("Selected mode: %s\n\n\n", modeName);
+                printf("Selected mode: %s\n\n\n", ToStr(str));
                 selectedMode = deckLinkDisplayMode;
+                FreeStr(str);
                 goto bail;
             }
         }
@@ -658,8 +677,6 @@ void Player::StartRunning(int videomode)
                                             audio_st->codec->channels,
                                             bmdAudioOutputStreamTimestamped) !=
         S_OK) {
-/*    bmdAudioOutputStreamTimestamped
- *  bmdAudioOutputStreamContinuous */
         fprintf(stderr, "Failed to enable audio output\n");
         return;
     }
@@ -737,6 +754,12 @@ void Player::WriteNextAudioSamples()
     uint32_t samplesWritten = 0;
     AVPacket pkt            = { 0 };
     unsigned int bufferedSamples;
+    int got_frame = 0;
+    int i;
+    int bytes_per_sample =
+        av_get_bytes_per_sample(audio_st->codec->sample_fmt) *
+        audio_st->codec->channels;
+
     m_deckLinkOutput->GetBufferedAudioSampleFrameCount(&bufferedSamples);
 
     if (bufferedSamples > kAudioWaterlevel)
@@ -748,19 +771,13 @@ void Player::WriteNextAudioSamples()
         return;
     }
 
-    data_size = sizeof(audio_buffer);
-    avcodec_decode_audio3(audio_st->codec,
-                          (int16_t *)audio_buffer, &data_size, &pkt);
-    av_free_packet(&pkt);
-
-    if (m_deckLinkOutput->ScheduleAudioSamples(audio_buffer + offset,
-                                               data_size / 4,
+    if (m_deckLinkOutput->ScheduleAudioSamples(pkt.data,
+                                               pkt.size / bytes_per_sample,
                                                pkt.pts, 48000,
                                                &samplesWritten) != S_OK)
         fprintf(stderr, "error writing audio sample\n");
-//    offset = (samplesWritten + offset) % data_size;
 
-    //fprintf(stderr, "Buffer %d, written %d, available %d offset %d\n", bufferedSamples, samplesWritten, data_size-offset, offset);//--------->
+    av_free_packet(&pkt);
 }
 
 /************************* DeckLink API Delegate Methods *****************************/
@@ -768,7 +785,8 @@ void Player::WriteNextAudioSamples()
 HRESULT Player::ScheduledFrameCompleted(IDeckLinkVideoFrame *completedFrame,
                                         BMDOutputFrameCompletionResult result)
 {
-    ScheduleNextFrame(false);
+    if (fill_me)
+        ScheduleNextFrame(false);
     return S_OK;
 }
 
