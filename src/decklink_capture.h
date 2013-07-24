@@ -26,11 +26,10 @@
 typedef int (*decklink_video_cb)(void *priv, uint8_t *frame,
                                  int width, int height, int stride,
                                  int64_t timestamp,
-                                 int64_t duration);
+                                 int64_t duration, int64_t flags);
 typedef int (*decklink_audio_cb)(void *priv, uint8_t *frame,
                                  int nb_samples,
-                                 int64_t timestamp);
-
+                                 int64_t timestamp, int64_t flags);
 
 /**
  * Main struct assumes you know the video mode you want.
@@ -41,11 +40,11 @@ typedef struct {
     int video_connection;
     int video_mode;
     int pixel_format;
+    int field_mode;
 
     int audio_connection;
     int audio_channels;
     int audio_sample_depth;
-
 
     int width, height;
     int64_t tb_den, tb_num;

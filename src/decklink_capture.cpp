@@ -137,7 +137,7 @@ CaptureDelegate::VideoInputFrameArrived(IDeckLinkVideoInputFrame  *v_frame,
                      v_frame->GetHeight(),
                      v_frame->GetRowBytes(),
                      timestamp,
-                     duration);
+                     duration, 0);
         }
     }
 
@@ -151,7 +151,7 @@ CaptureDelegate::VideoInputFrameArrived(IDeckLinkVideoInputFrame  *v_frame,
 
         audio_cb(ctx, frame_bytes,
                  a_frame->GetSampleFrameCount(),
-                 timestamp);
+                 timestamp, 0);
 
     }
     return S_OK;
@@ -313,8 +313,27 @@ DecklinkCapture *decklink_capture_alloc(DecklinkConf *c)
     if (i != c->video_mode)
         goto fail;
 
-    c->width  = capture->dm->GetWidth();
-    c->height = capture->dm->GetHeight();
+    c->width      = capture->dm->GetWidth();
+    c->height     = capture->dm->GetHeight();
+    switch (capture->dm->GetFieldDominance()) {
+    case bmdUnknownFieldDominance:
+        c->field_mode = 0;
+        break;
+    case bmdLowerFieldFirst:
+        c->field_mode = 1;
+        break;
+    case bmdUpperFieldFirst:
+        c->field_mode = 2;
+        break;
+    case bmdProgressiveFrame:
+        c->field_mode = 3;
+        break;
+    case bmdProgressiveSegmentedFrame:
+        c->field_mode = 4;
+        break;
+    default:
+        goto fail;
+    }
 
     capture->dm->GetFrameRate(&c->tb_num, &c->tb_den);
 
