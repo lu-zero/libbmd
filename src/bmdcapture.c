@@ -28,24 +28,12 @@
 #include <libavformat/avformat.h>
 #include "decklink_capture.h"
 
-pthread_mutex_t sleepMutex;
-pthread_cond_t sleepCond;
-int videoOutputFile = -1;
-int audioOutputFile = -1;
+static int verbose           = 0;
+static int max_frames        = -1;
+static uint64_t frame_count  = 0;
+static uint64_t memory_limit = 1024 * 1024 * 1024; // 1GByte(~50 sec)
 
-static int g_videoModeIndex      = -1;
-static int g_audioChannels       = 2;
-static int g_audioSampleDepth    = 16;
-const char *g_videoOutputFile    = NULL;
-const char *g_audioOutputFile    = NULL;
-static int g_maxFrames           = -1;
-int g_verbose                    = 0;
-unsigned long long g_memoryLimit = 1024 * 1024 * 1024;            // 1GByte(>50 sec)
-
-static unsigned long frameCount = 0;
-static unsigned int dropped     = 0, totaldropped = 0;
 static enum PixelFormat pix_fmt = PIX_FMT_UYVY422;
-static enum AVSampleFormat sample_fmt = AV_SAMPLE_FMT_S16;
 
 typedef struct AVPacketQueue {
     AVPacketList *first_pkt, *last_pkt;
@@ -57,8 +45,6 @@ typedef struct AVPacketQueue {
 } AVPacketQueue;
 
 static AVPacketQueue queue;
-
-static AVPacket flush_pkt;
 
 static void avpacket_queue_init(AVPacketQueue *q)
 {
@@ -74,7 +60,7 @@ static void avpacket_queue_flush(AVPacketQueue *q)
     pthread_mutex_lock(&q->mutex);
     for (pkt = q->first_pkt; pkt != NULL; pkt = pkt1) {
         pkt1 = pkt->next;
-        av_free_packet(&pkt->pkt);
+        av_packet_unref(&pkt->pkt);
         av_freep(&pkt);
     }
     q->last_pkt   = NULL;
@@ -94,17 +80,18 @@ static void avpacket_queue_end(AVPacketQueue *q)
 static int avpacket_queue_put(AVPacketQueue *q, AVPacket *pkt)
 {
     AVPacketList *pkt1;
+    int ret;
 
-    /* duplicate the packet */
-    if (pkt != &flush_pkt && av_dup_packet(pkt) < 0) {
-        return -1;
-    }
-
-    pkt1 = (AVPacketList *)av_malloc(sizeof(AVPacketList));
+    pkt1 = av_malloc(sizeof(AVPacketList));
     if (!pkt1) {
-        return -1;
+        return AVERROR(ENOMEM);
     }
-    pkt1->pkt  = *pkt;
+
+    if ((ret = av_packet_ref(&pkt1->pkt, pkt)) < 0) {
+        av_free(pkt1);
+        return ret;
+    }
+
     pkt1->next = NULL;
 
     pthread_mutex_lock(&q->mutex);
@@ -135,10 +122,6 @@ static int avpacket_queue_get(AVPacketQueue *q, AVPacket *pkt, int block)
     for (;; ) {
         pkt1 = q->first_pkt;
         if (pkt1) {
-            if (pkt1->pkt.data == flush_pkt.data) {
-                ret = 0;
-                break;
-            }
             q->first_pkt = pkt1->next;
             if (!q->first_pkt) {
                 q->last_pkt = NULL;
@@ -174,7 +157,8 @@ AVOutputFormat *fmt = NULL;
 AVFormatContext *oc;
 AVStream *audio_st, *video_st;
 
-static AVStream *add_audio_stream(AVFormatContext *oc, enum AVCodecID codec_id)
+static AVStream *add_audio_stream(DecklinkConf *conf, AVFormatContext *oc,
+                                  enum AVCodecID codec_id)
 {
     AVCodecContext *c;
     AVCodec *codec;
@@ -186,16 +170,16 @@ static AVStream *add_audio_stream(AVFormatContext *oc, enum AVCodecID codec_id)
         exit(1);
     }
 
-    c             = st->codec;
-    c->codec_id   = codec_id;
-    c->codec_type = AVMEDIA_TYPE_AUDIO;
+    c              = st->codec;
+    c->codec_id    = codec_id;
+    c->codec_type  = AVMEDIA_TYPE_AUDIO;
 
     /* put sample parameters */
-    c->sample_fmt = sample_fmt;
-//    c->bit_rate = 64000;
+    c->sample_fmt  = (conf->audio_sample_depth == 16) ? AV_SAMPLE_FMT_S16
+                                                      : AV_SAMPLE_FMT_S32;
     c->sample_rate = 48000;
-    c->channels    = g_audioChannels;
-    // some formats want stream headers to be separate
+    c->channels    = conf->audio_channels;
+
     if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
         c->flags |= CODEC_FLAG_GLOBAL_HEADER;
     }
@@ -231,34 +215,25 @@ static AVStream *add_video_stream(DecklinkConf *conf,
     c->codec_id   = codec_id;
     c->codec_type = AVMEDIA_TYPE_VIDEO;
 
-    /* put sample parameters */
-//    c->bit_rate = 400000;
-    /* resolution must be a multiple of two */
-    c->width  = conf->width;
-    c->height = conf->height;
-    /* time base: this is the fundamental unit of time (in seconds) in terms
-     * of which frame timestamps are represented. for fixed-fps content,
-     * timebase should be 1/framerate and timestamp increments should be
-     * identically 1.*/
+    c->width         = conf->width;
+    c->height        = conf->height;
     c->time_base.den = conf->tb_den;
     c->time_base.num = conf->tb_num;
     c->pix_fmt       = pix_fmt;
 
     if (codec_id == AV_CODEC_ID_V210)
         c->bits_per_raw_sample = 10;
-    // some formats want stream headers to be separate
+
     if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
         c->flags |= CODEC_FLAG_GLOBAL_HEADER;
     }
 
-    /* find the video encoder */
     codec = avcodec_find_encoder(c->codec_id);
     if (!codec) {
         fprintf(stderr, "codec not found\n");
         exit(1);
     }
 
-    /* open the codec */
     if (avcodec_open2(c, codec, NULL) < 0) {
         fprintf(stderr, "could not open codec\n");
         exit(1);
@@ -271,18 +246,19 @@ static AVStream *add_video_stream(DecklinkConf *conf,
 
 static int video_callback(void *priv, uint8_t *frame,
                           int width, int height, int stride,
-                          int64_t timestamp, int64_t duration)
+                          int64_t timestamp, int64_t duration,
+                          int64_t flags)
 {
 //    CaptureContext *ctx = priv;
     AVPacket pkt;
     AVCodecContext *c;
     av_init_packet(&pkt);
     c = video_st->codec;
-    if (g_verbose && frameCount % 25 == 0) {
+    if (verbose && frame_count++ % 25 == 0) {
         uint64_t qsize = avpacket_queue_size(&queue);
         fprintf(stderr,
                 "Frame received (#%lu) - Valid (%dB) - QSize %f\n",
-                frameCount,
+                frame_count,
                 stride * height,
                 (double)qsize / 1024 / 1024);
     }
@@ -305,16 +281,17 @@ static int video_callback(void *priv, uint8_t *frame,
 
 static int audio_callback(void *priv, uint8_t *frame,
                           int nb_samples,
-                          int64_t timestamp)
+                          int64_t timestamp,
+                          int64_t flags)
 {
-//    CaptureContext *ctx = priv;
+    DecklinkConf *ctx = priv;
     AVCodecContext *c;
     AVPacket pkt;
     av_init_packet(&pkt);
 
     c = audio_st->codec;
     //hack among hacks
-    pkt.size = nb_samples * g_audioChannels * (g_audioSampleDepth / 8);
+    pkt.size = nb_samples * ctx->audio_channels * (ctx->audio_sample_depth / 8);
     pkt.dts = pkt.pts = timestamp / audio_st->time_base.num;
     pkt.flags       |= AV_PKT_FLAG_KEY;
     pkt.stream_index = audio_st->index;
@@ -325,17 +302,24 @@ static int audio_callback(void *priv, uint8_t *frame,
     return 0;
 }
 
+pthread_cond_t cond;
+
 static void *push_packet(void *ctx)
 {
-    AVFormatContext *s = (AVFormatContext *)ctx;
+    AVFormatContext *s = ctx;
     AVPacket pkt;
     int ret;
 
     while (avpacket_queue_get(&queue, &pkt, 1)) {
-        pkt.destruct = NULL;
         av_interleaved_write_frame(s, &pkt);
-        av_destruct_packet(&pkt);
-        av_free_packet(&pkt);
+        if (max_frames && frame_count > max_frames) {
+            av_log(NULL, AV_LOG_INFO, "Frame limit reached\n");
+            pthread_cond_signal(&cond);
+        }
+        if (avpacket_queue_size(&queue) > memory_limit) {
+            av_log(NULL, AV_LOG_INFO, "Memory limit reached\n");
+            pthread_cond_signal(&cond);
+        }
     }
 
     return NULL;
@@ -343,23 +327,25 @@ static void *push_packet(void *ctx)
 
 int main(int argc, char *argv[])
 {
-    int displayModeCount               = 0;
-    int exitStatus                     = 1;
+    int ret = 1;
     int ch, i;
+    char *filename = NULL;
+    pthread_mutex_t mux;
+
     DecklinkConf c  = { .video_cb = video_callback,
                         .audio_cb = audio_callback };
     DecklinkCapture *capture;
     pthread_t th;
 
-    pthread_mutex_init(&sleepMutex, NULL);
-    pthread_cond_init(&sleepCond, NULL);
+    pthread_mutex_init(&mux, NULL);
+    pthread_cond_init(&cond, NULL);
     av_register_all();
 
     // Parse command line options
     while ((ch = getopt(argc, argv, "?hvc:s:f:a:m:n:p:M:F:C:A:V:")) != -1) {
         switch (ch) {
         case 'v':
-            g_verbose = 1;
+            verbose = 1;
             break;
         case 'm':
             c.video_mode = atoi(optarg);
@@ -371,10 +357,7 @@ int main(int argc, char *argv[])
             c.audio_sample_depth = atoi(optarg);
             switch (c.audio_sample_depth) {
             case 16:
-                sample_fmt = AV_SAMPLE_FMT_S16;
-                break;
             case 32:
-                sample_fmt = AV_SAMPLE_FMT_S32;
                 break;
             default:
                 goto bail;
@@ -398,13 +381,13 @@ int main(int argc, char *argv[])
             }
             break;
         case 'f':
-            g_videoOutputFile = optarg;
+            filename = optarg;
             break;
         case 'n':
-            g_maxFrames = atoi(optarg);
+            max_frames = atoi(optarg);
             break;
         case 'M':
-            g_memoryLimit = atoi(optarg) * 1024 * 1024 * 1024L;
+            memory_limit = atoi(optarg) * 1024 * 1024 * 1024L;
             break;
         case 'F':
             fmt = av_guess_format(optarg, NULL, NULL);
@@ -424,16 +407,18 @@ int main(int argc, char *argv[])
         }
     }
 
+    c.priv = &c;
+
     capture = decklink_capture_alloc(&c);
 
-    if (!g_videoOutputFile) {
+    if (!filename) {
         fprintf(stderr,
                 "Missing argument: Please specify output path using -f\n");
         goto bail;
     }
 
     if (!fmt) {
-        fmt = av_guess_format(NULL, g_videoOutputFile, NULL);
+        fmt = av_guess_format(NULL, filename, NULL);
         if (!fmt) {
             fprintf(
                 stderr,
@@ -445,13 +430,22 @@ int main(int argc, char *argv[])
     oc          = avformat_alloc_context();
     oc->oformat = fmt;
 
-    snprintf(oc->filename, sizeof(oc->filename), "%s", g_videoOutputFile);
+    snprintf(oc->filename, sizeof(oc->filename), "%s", filename);
 
     fmt->video_codec = (c.pixel_format == 0 ? AV_CODEC_ID_RAWVIDEO : AV_CODEC_ID_V210);
-    fmt->audio_codec = (sample_fmt == AV_SAMPLE_FMT_S16 ? AV_CODEC_ID_PCM_S16LE : AV_CODEC_ID_PCM_S32LE);
+    switch (c.audio_sample_depth) {
+    case 16:
+        fmt->audio_codec = AV_CODEC_ID_PCM_S16LE;
+        break;
+    case 32:
+        fmt->audio_codec = AV_CODEC_ID_PCM_S32LE;
+        break;
+    default:
+        exit(1);
+    }
 
     video_st = add_video_stream(&c, oc, fmt->video_codec);
-    audio_st = add_audio_stream(oc, fmt->audio_codec);
+    audio_st = add_audio_stream(&c, oc, fmt->audio_codec);
 
     if (!(fmt->flags & AVFMT_NOFILE)) {
         if (avio_open(&oc->pb, oc->filename, AVIO_FLAG_WRITE) < 0) {
@@ -462,7 +456,6 @@ int main(int argc, char *argv[])
 
     avformat_write_header(oc, NULL);
 
-
     avpacket_queue_init(&queue);
 
     if (pthread_create(&th, NULL, push_packet, oc))
@@ -471,15 +464,15 @@ int main(int argc, char *argv[])
     decklink_capture_start(capture);
 
     // Block main thread until signal occurs
-    pthread_mutex_lock(&sleepMutex);
-    pthread_cond_wait(&sleepCond, &sleepMutex);
-    pthread_mutex_unlock(&sleepMutex);
+    pthread_mutex_lock(&mux);
+    pthread_cond_wait(&cond, &mux);
+    pthread_mutex_unlock(&mux);
     fprintf(stderr, "Stopping Capture\n");
 
     decklink_capture_stop(capture);
+    ret = 0;
 
 bail:
-
     decklink_capture_free(capture);
 
     if (oc != NULL) {
@@ -490,5 +483,5 @@ bail:
         }
     }
 
-    return exitStatus;
+    return ret;
 }
