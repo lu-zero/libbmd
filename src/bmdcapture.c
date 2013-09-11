@@ -26,7 +26,8 @@
 #include <fcntl.h>
 
 #include <libavformat/avformat.h>
-#include "decklink_capture.h"
+#include "libbmd/decklink.h"
+#include "libbmd/decklink_capture.h"
 
 static int verbose           = 0;
 static int max_frames        = -1;
@@ -335,6 +336,7 @@ int main(int argc, char *argv[])
     DecklinkConf c  = { .video_cb = video_callback,
                         .audio_cb = audio_callback };
     DecklinkCapture *capture;
+    DecklinkIterator *iter;
     pthread_t th;
 
     pthread_mutex_init(&mux, NULL);
@@ -409,7 +411,12 @@ int main(int argc, char *argv[])
 
     c.priv = &c;
 
-    capture = decklink_capture_alloc(&c);
+    iter = decklink_interator_alloc();
+
+    if (!iter)
+        return 1;
+
+    capture = decklink_capture_alloc(iter, &c);
 
     if (!filename) {
         fprintf(stderr,

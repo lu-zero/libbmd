@@ -28,17 +28,11 @@
 #include <DeckLinkAPI.h>
 
 extern "C" {
-#include "decklink_capture.h"
+#include "libbmd/decklink.h"
+#include "libbmd/decklink_capture.h"
 }
 
-struct DecklinkCapture {
-    IDeckLinkIterator            *it;
-    IDeckLink                    *dl;
-    IDeckLinkInput               *in;
-    IDeckLinkDisplayModeIterator *dm_it;
-    IDeckLinkDisplayMode         *dm;
-    IDeckLinkConfiguration       *conf;
-};
+#include "libbmd/decklink_internal.h"
 
 class CaptureDelegate : public IDeckLinkInputCallback
 {
@@ -166,7 +160,6 @@ CaptureDelegate::VideoInputFormatChanged(BMDVideoInputFormatChangedEvents ev,
     return S_OK;
 }
 
-
 void decklink_capture_free(DecklinkCapture *capture)
 {
     if (!capture)
@@ -187,13 +180,10 @@ void decklink_capture_free(DecklinkCapture *capture)
         capture->dl = NULL;
     }
 
-    if (capture->it)
-        capture->it->Release();
-
     free(capture);
 }
 
-DecklinkCapture *decklink_capture_alloc(DecklinkConf *c)
+DecklinkCapture *decklink_capture_alloc(DecklinkIterator *it, DecklinkConf *c)
 {
     DecklinkCapture   *capture     = (DecklinkCapture *)calloc(1, sizeof(*capture));
     BMDPixelFormat    pix[]        = { bmdFormat8BitYUV, bmdFormat10BitYUV,
@@ -206,11 +196,6 @@ DecklinkCapture *decklink_capture_alloc(DecklinkConf *c)
 
     if (!capture)
         return NULL;
-
-    capture->it = CreateDeckLinkIteratorInstance();
-
-    if (!capture->it)
-        goto fail;
 
     switch (c->audio_channels) {
     case  0:
@@ -237,7 +222,7 @@ DecklinkCapture *decklink_capture_alloc(DecklinkConf *c)
         goto fail;
 
     do {
-        ret = capture->it->Next(&capture->dl);
+        ret = it->it->Next(&capture->dl);
     } while (i++ < c->instance);
 
     if (ret != S_OK)
@@ -367,3 +352,4 @@ int decklink_capture_stop(DecklinkCapture *capture)
 {
     return capture->in->StopStreams();
 }
+

@@ -18,10 +18,12 @@
  * License along with libbmd; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#ifndef DECKLINK_CAPTURE_H
-#define DECKLINK_CAPTURE_H
+#ifndef LIBBMD_DECKLINK_CAPTURE_H
+#define LIBBMD_DECKLINK_CAPTURE_H
 
 #include <stdint.h>
+
+#include "libbmd/decklink.h"
 
 typedef int (*decklink_video_cb)(void *priv, uint8_t *frame,
                                  int width, int height, int stride,
@@ -34,7 +36,7 @@ typedef int (*decklink_audio_cb)(void *priv, uint8_t *frame,
 /**
  * Main struct assumes you know the video mode you want.
  */
-typedef struct {
+typedef struct DecklinkConf {
     int instance;
 
     int video_connection;
@@ -56,7 +58,8 @@ typedef struct {
 
 typedef struct DecklinkCapture DecklinkCapture;
 
-DecklinkCapture *decklink_capture_alloc(DecklinkConf *conf);
+DecklinkCapture *decklink_capture_alloc(DecklinkIterator *iter,
+                                        DecklinkConf *conf);
 
 int decklink_capture_start(DecklinkCapture *capture);
 
@@ -64,4 +67,6 @@ int decklink_capture_stop(DecklinkCapture *capture);
 
 void decklink_capture_free(DecklinkCapture *);
 
-#endif // DECKLINK_CAPTURE_H
+DecklinkDisplay *decklink_capture_display(DecklinkCapture *cap);
+
+#endif // LIBBMD_DECKLINK_CAPTURE_H
