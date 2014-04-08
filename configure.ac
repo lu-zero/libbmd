@@ -16,12 +16,20 @@ AC_SUBST([sdk_dir])
 
 PKG_HAVE_WITH_MODULES([TOOLS], [libavformat libavcodec libswscale])
 
+AX_CHECK_LIBRARY([LIBCXX], [], [supc++], [LIBBMD_DEPS=""; echo "sup"],
+    [AX_CHECK_LIBRARY([LIBCXX], [], [stdc++], [LIBBMD_DEPS+=" -lstdc++"; echo "std"],
+        [echo "FAIL"])]
+)
+
 AC_CANONICAL_HOST
 
 AC_PROG_CXX
 
 AC_PROG_LIBTOOL
 AC_SUBST(LIBTOOL_DEPS)
+AC_SUBST(LIBBMD_DEPS)
+AC_SUBST(LIBCXX_LDFLAGS)
+AC_SUBST(LIBBMD_DEPS)
 
 DOLT
 
