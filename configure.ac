@@ -4,7 +4,7 @@
 AC_INIT([libbmd], [0.1], [http://github.com/lu-zero/libbmd])
 AC_CONFIG_AUX_DIR(.)
 AC_CONFIG_MACRO_DIR([m4])
-AM_INIT_AUTOMAKE([tar-ustar foreign no-dist-gzip dist-xz])
+AM_INIT_AUTOMAKE([tar-ustar foreign no-dist-gzip dist-xz subdir-objects])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_CONFIG_HEADERS([config.h])
 
@@ -14,12 +14,11 @@ AC_ARG_WITH([sdkdir], AS_HELP_STRING([--with-sdkdir=DIR],
 
 AC_SUBST([sdk_dir])
 
+AX_CHECK_LIBRARY([LIBCXX], [stdlib.h], [stdc++], [LIBBMD_DEPS+=" -lstdc++"],
+        [AC_MSG_ERROR([The C++ runtime library is missing.])])
+
 PKG_HAVE_WITH_MODULES([TOOLS], [libavformat libavcodec libswscale])
 
-AX_CHECK_LIBRARY([LIBCXX], [], [supc++], [LIBBMD_DEPS=""; echo "sup"],
-    [AX_CHECK_LIBRARY([LIBCXX], [], [stdc++], [LIBBMD_DEPS+=" -lstdc++"; echo "std"],
-        [echo "FAIL"])]
-)
 
 AC_CANONICAL_HOST
 
