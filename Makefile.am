@@ -9,7 +9,7 @@ nodist_EXTRA_libbmd_la_SOURCES = dummy.c
 libbmdincludedir = $(includedir)/libbmd
 
 libbmdinclude_HEADERS = \
-    $(top_srcdir)/src/decklink_capture.h
+	src/decklink_capture.h
 
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libbmd.pc
@@ -21,25 +21,25 @@ libbmd_la_CXXFLAGS = $(AM_CXXFLAGS)
 libbmd_la_LIBADD = $(LIBCXX_LDFLAGS)
 
 libbmd_la_SOURCES = \
-	$(top_srcdir)/src/decklink_capture.cpp
+	src/decklink_capture.cpp
 
 if HAVE_TOOLS
 
 bmdplay_SOURCES = \
-	$(top_srcdir)/src/bmdplay.cpp \
-	$(top_srcdir)/src/Play.h
+	src/bmdplay.cpp \
+	src/Play.h
 
 bmdplay_CXXFLAGS = $(TOOLS_CFLAGS) $(AM_CXXFLAGS)
 bmdplay_LDADD = $(TOOLS_LIBS)
 
 bmdcapture_SOURCES = \
-	$(top_srcdir)/src/bmdcapture.c
+	src/bmdcapture.c
 
 bmdcapture_CFLAGS = $(TOOLS_CFLAGS) $(AM_CFLAGS)
 bmdcapture_LDADD = $(TOOLS_LIBS) libbmd.la
 
 bmdgenlock_SOURCES = \
-	$(top_srcdir)/src/bmdgenlock.cpp
+	src/bmdgenlock.cpp
 
 bmdgenlock_CXXFLAGS = $(TOOLS_CFLAGS) $(AM_CXXFLAGS)
 bmdgenlock_LDADD = $(TOOLS_LIBS)
@@ -47,6 +47,3 @@ bmdgenlock_LDADD = $(TOOLS_LIBS)
 bin_PROGRAMS = bmdplay bmdcapture bmdgenlock
 
 endif
-
-#EXTRA_DIST = $(top_srcdir)/NOTICE
-
