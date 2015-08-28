@@ -4,6 +4,7 @@
 AC_INIT([libbmd], [0.1], [http://github.com/lu-zero/libbmd])
 AC_CONFIG_AUX_DIR(.)
 AC_CONFIG_MACRO_DIR([m4])
+AC_CANONICAL_HOST
 AM_INIT_AUTOMAKE([tar-ustar foreign no-dist-gzip dist-xz subdir-objects])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_CONFIG_HEADERS([config.h])
@@ -17,10 +18,15 @@ AC_SUBST([sdk_dir])
 AX_CHECK_LIBRARY([LIBCXX], [stdlib.h], [stdc++], [LIBBMD_DEPS+=" -lstdc++"],
         [AC_MSG_ERROR([The C++ runtime library is missing.])])
 
-PKG_HAVE_WITH_MODULES([TOOLS], [libavformat libavcodec libswscale])
+PKG_HAVE_WITH_MODULES([TOOLS], [libavformat libavcodec libswscale],
+                      [Example tools], [no])
 
+AS_CASE([$host_os],
+        [darwin*], [
+            LIBBMD_DEPS+=" -framework CoreFoundation"
+        ])
 
-AC_CANONICAL_HOST
+LIBCXX_LDFLAGS=$LIBBMD_DEPS
 
 AC_PROG_CXX
 
@@ -28,7 +34,6 @@ AC_PROG_LIBTOOL
 AC_SUBST(LIBTOOL_DEPS)
 AC_SUBST(LIBBMD_DEPS)
 AC_SUBST(LIBCXX_LDFLAGS)
-AC_SUBST(LIBBMD_DEPS)
 
 DOLT
 
