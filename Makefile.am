@@ -1,6 +1,6 @@
 ACLOCAL_AMFLAGS = -I m4
 
-AM_CPPFLAGS = -I$(sdk_dir)
+AM_CPPFLAGS = -I"$(sdk_dir)"
 AM_CXXFLAGS = -fno-rtti -Wno-multichar -D__STDC_CONSTANT_MACROS
 libbmd_la_LINK = $(LINK) $(libbmd_la_LDFLAGS)
 # Mention a dummy pure C file to trigger generation of the $(LINK) variable
